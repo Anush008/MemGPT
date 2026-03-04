@@ -30,6 +30,7 @@ from letta.server.rest_api.dependencies import HeaderParams, get_headers, get_le
 from letta.server.server import SyncServer
 from letta.services.file_processor.embedder.openai_embedder import OpenAIEmbedder
 from letta.services.file_processor.embedder.pinecone_embedder import PineconeEmbedder
+from letta.services.file_processor.embedder.qdrant_embedder import QdrantEmbedder
 from letta.services.file_processor.file_processor import FileProcessor
 from letta.services.file_processor.file_types import get_allowed_media_types, get_extension_to_mime_type_map, register_mime_types
 from letta.services.file_processor.parser.markitdown_parser import MarkitdownFileParser
@@ -508,13 +509,21 @@ async def load_file_to_source_cloud(
         file_parser = MarkitdownFileParser()
 
     # determine which embedder to use - turbopuffer takes precedence
-    if should_use_tpuf():
+    if source.vector_db_provider == VectorDBProvider.TPUF:
         from letta.services.file_processor.embedder.turbopuffer_embedder import TurbopufferEmbedder
 
         embedder = TurbopufferEmbedder(embedding_config=embedding_config)
-    elif should_use_pinecone():
+    elif source.vector_db_provider == VectorDBProvider.PINECONE:
+        from letta.services.file_processor.embedder.pinecone_embedder import PineconeEmbedder
+
         embedder = PineconeEmbedder(embedding_config=embedding_config)
+    elif source.vector_db_provider == VectorDBProvider.QDRANT:
+        from letta.services.file_processor.embedder.qdrant_embedder import QdrantEmbedder
+
+        embedder = QdrantEmbedder(embedding_config=embedding_config)
     else:
+        from letta.services.file_processor.embedder.openai_embedder import OpenAIEmbedder
+
         embedder = OpenAIEmbedder(embedding_config=embedding_config)
 
     file_processor = FileProcessor(file_parser=file_parser, embedder=embedder, actor=actor)

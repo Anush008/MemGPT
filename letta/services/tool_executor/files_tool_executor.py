@@ -7,6 +7,7 @@ from sqlalchemy.exc import NoResultFound
 from letta.constants import PINECONE_TEXT_FIELD_NAME
 from letta.functions.types import FileOpenRequest
 from letta.helpers.pinecone_utils import search_pinecone_index, should_use_pinecone
+from letta.helpers.qdrant_client import should_use_qdrant
 from letta.helpers.tpuf_client import should_use_tpuf
 from letta.log import get_logger
 from letta.otel.tracing import trace_method
@@ -563,8 +564,9 @@ class LettaFileToolExecutor(ToolExecutor):
         attached_sources = await self.agent_manager.list_attached_sources_async(agent_id=agent_state.id, actor=self.actor)
         attached_tpuf_sources = [source for source in attached_sources if source.vector_db_provider == VectorDBProvider.TPUF]
         attached_pinecone_sources = [source for source in attached_sources if source.vector_db_provider == VectorDBProvider.PINECONE]
+        attached_qdrant_sources = [source for source in attached_sources if source.vector_db_provider == VectorDBProvider.QDRANT]
 
-        if not attached_tpuf_sources and not attached_pinecone_sources:
+        if not attached_tpuf_sources and not attached_pinecone_sources and not attached_qdrant_sources:
             return await self._search_files_native(agent_state, query, limit)
 
         results = []
@@ -582,6 +584,10 @@ class LettaFileToolExecutor(ToolExecutor):
         if should_use_pinecone() and attached_pinecone_sources:
             pinecone_result = await self._search_files_pinecone(agent_state, attached_pinecone_sources, query, limit)
             results.append(pinecone_result)
+
+        if should_use_qdrant() and attached_qdrant_sources:
+            qdrant_result = await self._search_files_qdrant(agent_state, attached_qdrant_sources, query, limit)
+            results.append(qdrant_result)
 
         # combine results from both sources
         if results:
@@ -686,6 +692,96 @@ class LettaFileToolExecutor(ToolExecutor):
         formatted_results = [summary, "=" * len(summary), *results]
 
         self.logger.info(f"Turbopuffer search completed: {total_hits} matches across {file_count} files")
+        return "\n".join(formatted_results)
+
+    async def _search_files_qdrant(self, agent_state: AgentState, attached_sources: List[Source], query: str, limit: int) -> str:
+        from letta.helpers.qdrant_client import LettaQdrantClient
+        from letta.llm_api.llm_client import LLMClient
+
+        source_ids = [source.id for source in attached_sources]
+        if not source_ids:
+            return "No valid source IDs found for attached files"
+
+        file_agents = await self.files_agents_manager.list_files_for_agent(
+            agent_id=agent_state.id, per_file_view_window_char_limit=agent_state.per_file_view_window_char_limit, actor=self.actor
+        )
+        if not file_agents:
+            return "No files are currently attached to search"
+
+        file_map = {fa.file_id: fa.file_name for fa in file_agents}
+
+        embedding_client = LLMClient.create(
+            provider_type=agent_state.embedding_config.embedding_endpoint_type,
+            actor=self.actor,
+        )
+        query_embeddings = await embedding_client.request_embeddings([query], agent_state.embedding_config)
+        query_vector = query_embeddings[0]
+
+        qdrant_client = LettaQdrantClient()
+
+        results = []
+        total_hits = 0
+        files_with_matches = {}
+
+        import asyncio
+
+        for source_id in source_ids:
+            try:
+                passages = await asyncio.to_thread(
+                    qdrant_client.query_passages,
+                    archive_id=source_id,
+                    query_vector=query_vector,
+                    top_k=limit,
+                )
+
+                for passage, score, payload in passages:
+                    if total_hits >= limit:
+                        break
+
+                    total_hits += 1
+
+                    file_id = payload.get("file_id")
+                    file_name = file_map.get(file_id, "Unknown File")
+
+                    if file_name not in files_with_matches:
+                        files_with_matches[file_name] = []
+                    files_with_matches[file_name].append({"text": passage.text, "score": score, "passage_id": passage.id})
+            except Exception as e:
+                self.logger.error(f"Qdrant search failed for source {source_id}: {str(e)}")
+                raise e
+
+        if not files_with_matches:
+            return f"No semantic matches found for query: '{query}'"
+
+        passage_num = 0
+        for file_name, matches in files_with_matches.items():
+            for match in matches:
+                passage_num += 1
+
+                score_display = f"(score: {match['score']:.3f})"
+                passage_header = f"\n=== {file_name} (passage #{passage_num}) {score_display} ==="
+
+                passage_text = match["text"].strip()
+                lines = passage_text.splitlines()
+                formatted_lines = [f"  {line}" for line in lines[:20]]  # limit to first 20 lines per passage
+
+                if len(lines) > 20:
+                    formatted_lines.append(f"  ... [truncated {len(lines) - 20} more lines]")
+
+                passage_content = "\n".join(formatted_lines)
+                results.append(f"{passage_header}\n{passage_content}")
+
+        if files_with_matches:
+            matched_file_names = [name for name in files_with_matches.keys() if name != "Unknown File"]
+            if matched_file_names:
+                await self.files_agents_manager.mark_access_bulk(agent_id=agent_state.id, file_names=matched_file_names, actor=self.actor)
+
+        file_count = len(files_with_matches)
+        summary = f"Found {total_hits} matches in {file_count} file{'s' if file_count != 1 else ''} for query: '{query}'"
+
+        formatted_results = [summary, "=" * len(summary), *results]
+
+        self.logger.info(f"Qdrant search completed: {total_hits} matches across {file_count} files")
         return "\n".join(formatted_results)
 
     async def _search_files_pinecone(self, agent_state: AgentState, attached_sources: List[Source], query: str, limit: int) -> str:

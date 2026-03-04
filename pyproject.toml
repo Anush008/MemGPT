@@ -78,7 +78,6 @@ dependencies = [
     "clickhouse-connect>=0.10.0",
     "aiofiles>=24.1.0",
     "async-lru>=2.0.5",
-
 ]
 
 [project.scripts]
@@ -95,6 +94,7 @@ postgres = [
 ]
 redis = ["redis>=6.2.0"]
 pinecone = ["pinecone[asyncio]>=7.3.0"]
+qdrant = ["qdrant-client>=1.17.0"]
 sqlite = ["aiosqlite>=0.21.0", "sqlite-vec>=0.1.7a2"]
 
 # ====== Server ======

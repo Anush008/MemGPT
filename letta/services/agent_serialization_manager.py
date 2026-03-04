@@ -11,6 +11,7 @@ from letta.errors import (
     AgentNotFoundForExportError,
 )
 from letta.helpers.pinecone_utils import should_use_pinecone
+from letta.helpers.qdrant_client import should_use_qdrant
 from letta.helpers.tpuf_client import should_use_tpuf
 from letta.log import get_logger
 from letta.schemas.agent import AgentState, CreateAgent
@@ -665,8 +666,13 @@ class AgentSerializationManager:
                     embedder = TurbopufferEmbedder(embedding_config=embedder_config)
                 elif should_use_pinecone():
                     embedder = PineconeEmbedder(embedding_config=embedder_config)
+                elif should_use_qdrant():
+                    from letta.services.file_processor.embedder.qdrant_embedder import QdrantEmbedder
+
+                    embedder = QdrantEmbedder(embedding_config=embedder_config)
                 else:
                     embedder = OpenAIEmbedder(embedding_config=embedder_config)
+
                 file_processor = FileProcessor(
                     file_parser=self.file_parser,
                     embedder=embedder,

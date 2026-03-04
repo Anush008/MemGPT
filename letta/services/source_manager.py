@@ -24,7 +24,10 @@ class SourceManager:
         determine which vector db provider to use based on configuration.
         turbopuffer takes precedence when available.
         """
-        if should_use_tpuf():
+        from letta.helpers.qdrant_client import should_use_qdrant
+        if should_use_qdrant():
+            return VectorDBProvider.QDRANT
+        elif should_use_tpuf():
             return VectorDBProvider.TPUF
         elif should_use_pinecone():
             return VectorDBProvider.PINECONE

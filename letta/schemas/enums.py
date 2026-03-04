@@ -277,6 +277,7 @@ class VectorDBProvider(str, Enum):
     NATIVE = "native"
     TPUF = "tpuf"
     PINECONE = "pinecone"
+    QDRANT = "qdrant"
 
 
 class TagMatchMode(str, Enum):

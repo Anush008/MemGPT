@@ -432,6 +432,11 @@ class Settings(BaseSettings):
     embed_all_messages: bool = False
     embed_tools: bool = False
 
+    # For qdrant
+    enable_qdrant: bool = False
+    qdrant_url: Optional[str] = None
+    qdrant_api_key: Optional[str] = None
+
     # For encryption
     encryption_key: Optional[str] = None
 

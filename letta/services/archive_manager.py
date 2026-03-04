@@ -3,6 +3,7 @@ from typing import Dict, List, Optional
 
 from sqlalchemy import delete, or_, select
 
+from letta.helpers.qdrant_client import should_use_qdrant
 from letta.helpers.tpuf_client import should_use_tpuf
 from letta.log import get_logger
 from letta.orm import ArchivalPassage, Archive as ArchiveModel, ArchivesAgents
@@ -38,7 +39,12 @@ class ArchiveManager:
         try:
             async with db_registry.async_session() as session:
                 # determine vector db provider based on settings
-                vector_db_provider = VectorDBProvider.TPUF if should_use_tpuf() else VectorDBProvider.NATIVE
+                if should_use_qdrant():
+                    vector_db_provider = VectorDBProvider.QDRANT
+                elif should_use_tpuf():
+                    vector_db_provider = VectorDBProvider.TPUF
+                else:
+                    vector_db_provider = VectorDBProvider.NATIVE
 
                 archive = ArchiveModel(
                     name=name,
@@ -346,6 +352,25 @@ class ArchiveManager:
             actor=actor,
         )
 
+        # If archive uses Qdrant, also write to Qdrant (dual-write)
+        if archive.vector_db_provider == VectorDBProvider.QDRANT:
+            try:
+                import asyncio
+                from letta.helpers.qdrant_client import LettaQdrantClient
+
+                qdrant_client = LettaQdrantClient()
+                await asyncio.to_thread(
+                    qdrant_client.insert_archival_memories,
+                    archive_id=archive.id,
+                    text_chunks=[created_passage.text],
+                    passage_ids=[created_passage.id],
+                    organization_id=actor.organization_id,
+                    actor=actor,
+                    vectors=[created_passage.embedding],
+                )
+            except Exception as e:
+                logger.error(f"Failed to upload passage to Qdrant: {e}")
+
         # If archive uses Turbopuffer, also write to Turbopuffer (dual-write)
         if archive.vector_db_provider == VectorDBProvider.TPUF:
             try:
@@ -437,6 +462,25 @@ class ArchiveManager:
             pydantic_passages=pydantic_passages,
             actor=actor,
         )
+
+        if archive.vector_db_provider == VectorDBProvider.QDRANT:
+            try:
+                import asyncio
+                from letta.helpers.qdrant_client import LettaQdrantClient
+
+                qdrant_client = LettaQdrantClient()
+                await asyncio.to_thread(
+                    qdrant_client.insert_archival_memories,
+                    archive_id=archive.id,
+                    text_chunks=[passage.text for passage in created_passages],
+                    passage_ids=[passage.id for passage in created_passages],
+                    organization_id=actor.organization_id,
+                    actor=actor,
+                    vectors=[passage.embedding for passage in created_passages],
+                )
+                logger.info(f"Uploaded {len(created_passages)} passages to Qdrant for archive {archive_id}")
+            except Exception as e:
+                logger.error(f"Failed to upload passages to Qdrant: {e}")
 
         if archive.vector_db_provider == VectorDBProvider.TPUF:
             try:

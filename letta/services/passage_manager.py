@@ -791,6 +791,18 @@ class PassageManager:
                             if strict_mode:
                                 raise  # Re-raise the exception in strict mode
 
+                    elif archive.vector_db_provider == VectorDBProvider.QDRANT:
+                        try:
+                            import asyncio
+                            from letta.helpers.qdrant_client import LettaQdrantClient
+
+                            qdrant_client = LettaQdrantClient()
+                            await asyncio.to_thread(qdrant_client.delete_passages, archive_id=archive_id, passage_ids=[passage_id])
+                        except Exception as e:
+                            logger.error(f"Failed to delete passage from Qdrant: {e}")
+                            if strict_mode:
+                                raise
+
                 return True
             except NoResultFound:
                 raise NoResultFound(f"Agent passage with id {passage_id} not found.")
@@ -876,7 +888,7 @@ class PassageManager:
                         passages_by_archive[passage.archive_id] = []
                     passages_by_archive[passage.archive_id].append(passage.id)
 
-            # Check each archive and delete from Turbopuffer if needed
+            # Check each archive and delete from Turbopuffer or Qdrant if needed
             for archive_id, passage_ids in passages_by_archive.items():
                 archive = await self.archive_manager.get_archive_by_id_async(archive_id=archive_id, actor=actor)
                 if archive.vector_db_provider == VectorDBProvider.TPUF:
@@ -889,6 +901,17 @@ class PassageManager:
                         logger.error(f"Failed to delete passages from Turbopuffer: {e}")
                         if strict_mode:
                             raise  # Re-raise the exception in strict mode
+                elif archive.vector_db_provider == VectorDBProvider.QDRANT:
+                    try:
+                        import asyncio
+                        from letta.helpers.qdrant_client import LettaQdrantClient
+
+                        qdrant_client = LettaQdrantClient()
+                        await asyncio.to_thread(qdrant_client.delete_passages, archive_id=archive_id, passage_ids=passage_ids)
+                    except Exception as e:
+                        logger.error(f"Failed to delete passages from Qdrant: {e}")
+                        if strict_mode:
+                            raise
 
             return True
 
